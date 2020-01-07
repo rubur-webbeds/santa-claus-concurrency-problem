@@ -8,6 +8,7 @@ package santaclaus;
 import java.util.concurrent.Semaphore;
 import java.util.logging.Level;
 import java.util.logging.Logger;
+import java.util.Random;
 
 /**
  *
@@ -17,17 +18,20 @@ public class SantaClaus implements Runnable {
 
     static final int REINDEER = 9;
     static final int ELVES = 9;
+    static final int ELVES_TO_WAKE_SANTA = 3;
     static volatile int num_reindeer = 0;
     static volatile int num_elves = 0;
-    static volatile int num_reindeer_loaded = 0;
     static volatile int num_elves_helped = 0;
     static Semaphore reindeer = new Semaphore(1);
-    static Semaphore elves = new Semaphore(2);
-    static Semaphore reindeer_wait = new Semaphore(0);
-    static Semaphore elves_wait = new Semaphore(1);
+    static Semaphore elves = new Semaphore(3);
     static Semaphore santa = new Semaphore(0);
+    static Semaphore reindeer_wait = new Semaphore(0);
+    static Semaphore elves_mutex = new Semaphore(1);
     static Semaphore santa_mutex = new Semaphore(1);
-    static Semaphore ask_help = new Semaphore(1);
+    static Semaphore ask_help = new Semaphore(0);
+    static Semaphore santa_help = new Semaphore(0);
+    static Semaphore santa_load = new Semaphore(0);
+    Random rnd = new Random();
 
     private final int id;
 
@@ -65,33 +69,39 @@ public class SantaClaus implements Runnable {
     public void run() {
         try {
 
-            while (num_reindeer_loaded != 1 || num_elves_helped != 3) {
+            while (num_elves_helped < 6) {
                 System.out.println("SANTA: let's rest");
                 santa.acquire();
-                //santa_mutex.acquire();
-                
+
                 if (num_reindeer == REINDEER) {
                     System.out.println("SANTA: All loaded");
 
+                    santa_mutex.acquire();
                     num_reindeer = 0;
-                    num_reindeer_loaded++;
+                    santa_mutex.release();
 
                     for (int i = 0; i < REINDEER - 1; i++) { // -1 because the last one does not acquire
                         reindeer_wait.release();
                     }
-                } else {
-                    System.out.println("SANTA: Helping these bois");
-
-                    num_elves = 0;
-                    num_elves_helped++;
-                    System.err.printf("helped %d\n", num_elves_helped);
-
-                    for (int i = 0; i < 3; i++) {
-                        ask_help.release();
+                    for(int i = 0; i < REINDEER; i++){
+                        santa_load.release();
                     }
                 }
-                
-                //santa_mutex.release();
+                if (num_elves == ELVES_TO_WAKE_SANTA) {
+                    santa_mutex.acquire();
+                    System.out.println("SANTA: Helping these bois");
+                    num_elves = 0;
+                    num_elves_helped++;
+                    System.out.printf("SANTA: Helped %d groups\n", num_elves_helped);
+                    santa_mutex.release();
+
+                    for (int i = 0; i < ELVES_TO_WAKE_SANTA - 1; i++) {
+                        ask_help.release();
+                    }
+                    for (int i = 0; i < ELVES_TO_WAKE_SANTA; i++) {
+                        santa_help.release();
+                    }
+                }
             }
 
         } catch (InterruptedException ex) {
@@ -110,8 +120,8 @@ public class SantaClaus implements Runnable {
         @Override
         public void run() {
             try {
-                Thread.sleep(5000);
-                
+                Thread.sleep(rnd.nextInt(500) + 500);
+
                 System.out.printf("Reindeer %d arrived\n", id);
                 reindeer.acquire();
 
@@ -127,6 +137,8 @@ public class SantaClaus implements Runnable {
                     reindeer_wait.acquire();
                 }
 
+                santa_load.acquire();
+                
                 System.out.printf("Reindeer %d ends\n", id);
             } catch (InterruptedException ex) {
                 Logger.getLogger(SantaClaus.class.getName()).log(Level.SEVERE, null, ex);
@@ -145,23 +157,27 @@ public class SantaClaus implements Runnable {
         @Override
         public void run() {
             try {
-                for (int i = 0; i < 1; i++) {
-                    //System.err.printf("%d: permits %d\n", id, elves.availablePermits());
+                for (int i = 0; i < 2; i++) {
+                    Thread.sleep(rnd.nextInt(500) + 500);
+                    
                     elves.acquire();
-                    
-                    System.out.printf("Elf %d needs help\n", id);
-                    elves_wait.acquire();
-                    
-                    num_elves++;
-                    
-                    if (num_elves == 3) {
-                        santa.release();
-                    }
-                    
-                    elves_wait.release();
 
-                    ask_help.acquire();
-                    
+                    System.out.printf("Elf %d needs help\n", id);
+                    elves_mutex.acquire();
+
+                    num_elves++;
+
+                    if (num_elves == ELVES_TO_WAKE_SANTA) {
+                        System.out.println("Asking Santa some help");
+                        elves_mutex.release();
+                        santa.release();
+                    } else {
+                        elves_mutex.release();
+                        ask_help.acquire();
+                    }
+
+                    santa_help.acquire();
+
                     elves.release();
                 }
 
